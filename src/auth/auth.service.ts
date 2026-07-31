@@ -1,49 +1,52 @@
-import { ConflictException, Inject, Injectable, UnauthorizedException } from '@nestjs/common';
-import { UpdateAuthDto } from './dto/update-auth.dto';
+import { ConflictException, Injectable, UnauthorizedException } from '@nestjs/common';
+import { LoginDto, } from './dto/login.dto';
 import * as bcrypt from 'bcrypt';
 import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
 import { UserEntity } from './entities/user.entity';
 import { DataSource, Repository } from 'typeorm';
-import { ChannelEntity } from './entities/chanel.entity';
 import { randomBytes } from 'crypto';
 import { TokenService } from './token.service';
 import { RefreshEntity } from './entities/refresh.entity';
+import { RegisterDto } from './dto/register.dto';
+import { ChannelService } from 'src/channel/channel.service';
+import { ChannelEntity } from 'src/channel/entities/chanel.entity';
 
 @Injectable()
 export class AuthService {
   constructor(
     private readonly jwtService: TokenService,
+    private readonly channelService: ChannelService,
     @InjectRepository(UserEntity)
     private userRepo: Repository<UserEntity>,
-    @InjectRepository(UserEntity)
-    private channelRepo: Repository<ChannelEntity>,
     @InjectRepository(RefreshEntity)
     private refreshRepo: Repository<RefreshEntity>,
     @InjectDataSource()
     private dataSource: DataSource,
   ) { }
-  async registration(body: { username: string, password: string, email: string }) {
-    const existing = await this.userRepo.findOne({ where:  [
-    { username: body.username },
-    { email: body.email },
-  ] })
+  async registration(body: RegisterDto) {
+    const existing = await this.userRepo.findOne({
+      where: [
+        { username: body.username },
+        { email: body.email },
+      ]
+    })
     if (existing) throw new ConflictException('Username or email already taken')
     const hash = await this.hashed(body.password)
-    const stream_key = randomBytes(32).toString('hex')
     const refreshExpiresAt = new Date(Date.now() + 1000 * 60 * 60 * 24 * 7);
     try {
       const user = await this.dataSource.transaction(async (manager) => {
-        const user = await manager.save(UserEntity,
-          { username: body.username, email: body.email, password: hash })
-        await manager.save(ChannelEntity, { user, stream_key })
-        return user
-      })
+        const user = await manager.save(UserEntity, {
+          username: body.username, email: body.email, password: hash,
+        });
+        await this.channelService.createChannel(user, manager);
+        return user;
+      });
       const { accessToken, refreshToken, hashToken } = await this.jwtCreate(user)
       await this.refreshRepo.save({ token: hashToken, expires_at: refreshExpiresAt, user })
       return { accessToken, refreshToken }
     } catch (e: any) {
       console.log(e.code);
-      
+
       if (e.code === '23505') {              // Postgres: unique_violation
         throw new ConflictException('Username or email already taken');
       }
@@ -51,7 +54,7 @@ export class AuthService {
     }
   }
 
-  async login(body: { username: string, password: string }) {
+  async login(body: LoginDto) {
     const user = await this.userRepo.findOne({
       where: { username: body.username },
       select: { id: true, username: true, password: true }
@@ -65,10 +68,10 @@ export class AuthService {
     return { id: user.id, username: user.username, accessToken, refreshToken }
   }
 
-  async googleLogin(req) { 
-    
+  async googleLogin(req) {
+
     if (!req.user) {
-      return 'No user from google';
+      throw new UnauthorizedException('No user from Google')
     }
     const user = await this.userRepo.findOne({ where: { google_id: req.user.googleId } })
     if (user) {
@@ -113,11 +116,11 @@ export class AuthService {
     return { accessToken, refreshToken, hashToken }
   }
 
-  async jwtTransaction(user:UserEntity, hashToken:string) {
+  async jwtTransaction(user: UserEntity, hashToken: string) {
     const refreshExpiresAt = new Date(Date.now() + 1000 * 60 * 60 * 24 * 7);
     await this.dataSource.transaction(async (manager) => {
-        await manager.delete(RefreshEntity, { user: { id: user.id } })
-        await manager.save(RefreshEntity, { user, token: hashToken, expires_at: refreshExpiresAt })
-      })
+      await manager.delete(RefreshEntity, { user: { id: user.id } })
+      await manager.save(RefreshEntity, { user, token: hashToken, expires_at: refreshExpiresAt })
+    })
   }
 }

@@ -1,5 +1,5 @@
+import { UserEntity } from "src/auth/entities/user.entity"
 import { Column, Entity, JoinColumn, OneToOne, PrimaryGeneratedColumn } from "typeorm"
-import { UserEntity } from "./user.entity"
 
 @Entity()
 export class ChannelEntity {
@@ -11,6 +11,15 @@ export class ChannelEntity {
 
     @Column({ default: 'offline' })
     online_status!: "online" | "offline"
+
+    @Column({type:'varchar', nullable: true})
+    description!:string | null
+
+    @Column({type:'varchar', nullable: true})
+    baner_img_link!: string | null
+
+    @Column({type:'varchar', nullable: true})
+    avatar_img_link!: string | null
 
     @OneToOne(() => UserEntity, (user) => user.channel)
     @JoinColumn({ name: 'user_id' })

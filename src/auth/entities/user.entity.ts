@@ -1,5 +1,5 @@
+import { ChannelEntity } from "src/channel/entities/chanel.entity"
 import { Column, Entity, OneToOne, PrimaryGeneratedColumn } from "typeorm"
-import { ChannelEntity } from "./chanel.entity"
 
 @Entity()
 export class UserEntity {

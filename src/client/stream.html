@@ -1,0 +1,285 @@
+<!DOCTYPE html>
+<html lang="ru">
+
+<head>
+  <meta charset="utf-8">
+  <title>myTwitch — stream</title>
+  <style>
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      background: #0e0e10;
+      color: #efeff1;
+      font: 14px/1.4 system-ui, sans-serif;
+      display: flex;
+      height: 100vh;
+    }
+
+    #player {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: #000;
+    }
+
+    #video {
+      width: 100%;
+      max-height: 100vh;
+    }
+
+    #chat {
+      width: 340px;
+      display: flex;
+      flex-direction: column;
+      border-left: 1px solid #2a2a2d;
+      background: #18181b;
+    }
+
+    #chat header {
+      padding: 10px;
+      border-bottom: 1px solid #2a2a2d;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    #chat header .row {
+      display: flex;
+      gap: 6px;
+    }
+
+    input,
+    button {
+      font: inherit;
+      border-radius: 4px;
+      border: 1px solid #2a2a2d;
+      background: #0e0e10;
+      color: #efeff1;
+      padding: 7px 9px;
+      min-width: 0;
+    }
+
+    input {
+      flex: 1;
+    }
+
+    button {
+      background: #9147ff;
+      border-color: #9147ff;
+      cursor: pointer;
+      flex: none;
+    }
+
+    button:disabled {
+      background: #3a3a3d;
+      border-color: #3a3a3d;
+      cursor: default;
+    }
+
+    #connect {
+      flex: 1;
+    }
+
+    #status {
+      font-size: 12px;
+      color: #adadb8;
+    }
+
+    #messages {
+      flex: 1;
+      overflow-y: auto;
+      padding: 8px;
+    }
+
+    .msg {
+      padding: 3px 0;
+      word-wrap: break-word;
+    }
+
+    .msg .user {
+      font-weight: 700;
+      color: #a970ff;
+    }
+
+    .msg.system {
+      color: #adadb8;
+      font-style: italic;
+    }
+
+    #form {
+      display: flex;
+      gap: 6px;
+      padding: 10px;
+      border-top: 1px solid #2a2a2d;
+    }
+  </style>
+</head>
+
+<body>
+  <div id="player">
+    <video id="video" controls autoplay></video>
+  </div>
+
+  <aside id="chat">
+    <header>
+      <div class="row">
+        <input id="token" placeholder="accessToken (без 'Bearer')">
+      </div>
+      <div class="row">
+        <button id="connect">Войти</button>
+      </div>
+      <div id="status">не подключён</div>
+    </header>
+
+    <div id="messages"></div>
+
+    <form id="form">
+      <input id="input" placeholder="Написать сообщение..." autocomplete="off" disabled>
+      <button id="send" disabled>Чат</button>
+    </form>
+  </aside>
+
+  <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
+  <script src="https://cdn.socket.io/4.8.1/socket.io.min.js"></script>
+  <script>
+    // ---------- плеер ----------
+    const video = document.getElementById('video');
+    const src = 'http://localhost:8000/live/b8ddf22fbac9758ff45a3342092d0d1346e0fe104e10d048a60123266046541d/index.m3u8';
+    if (Hls.isSupported()) {
+      const hls = new Hls();
+      hls.loadSource(src);
+      hls.attachMedia(video);
+    } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+      video.src = src;   // Safari умеет нативно
+    }
+
+    // ---------- чат ----------
+    const SERVER = 'http://localhost:3000';
+
+    const $token = document.getElementById('token');
+    const $connect = document.getElementById('connect');
+    const $status = document.getElementById('status');
+    const $messages = document.getElementById('messages');
+    const $form = document.getElementById('form');
+    const $input = document.getElementById('input');
+    const $send = document.getElementById('send');
+
+    // чтобы не вставлять токен при каждой перезагрузке
+    $token.value = localStorage.getItem('accessToken') || '';
+
+    let socket = null;
+
+    // payload jwt — вторая часть токена, base64url
+    function readUsername(token) {
+      try {
+        const payload = token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/');
+        const json = decodeURIComponent(
+          atob(payload).split('').map(c => '%' + c.charCodeAt(0).toString(16).padStart(2, '0')).join('')
+        );
+        return JSON.parse(json).username || null;
+      } catch {
+        return null;
+      }
+    }
+
+    function addMessage(username, text) {
+      const atBottom = $messages.scrollHeight - $messages.scrollTop - $messages.clientHeight < 40;
+
+      const el = document.createElement('div');
+      el.className = 'msg';
+      if (username) {
+        const user = document.createElement('span');
+        user.className = 'user';
+        user.textContent = username + ':';
+        el.append(user, ' ', text);   // textContent — экранирование от html-инъекций
+      } else {
+        el.classList.add('system');
+        el.textContent = text;
+      }
+
+      $messages.append(el);
+      if (atBottom) $messages.scrollTop = $messages.scrollHeight;
+    }
+
+    // сервер шлёт строку вида "[oleglis9] Привет" — разбираем на ник и текст
+    function parseChat(raw) {
+      const m = /^\[([^\]]+)\]\s?([\s\S]*)$/.exec(raw);
+      return m ? { username: m[1], text: m[2] } : { username: null, text: raw };
+    }
+
+    function setConnected(ok) {
+      $input.disabled = !ok;
+      $send.disabled = !ok;
+      $connect.textContent = ok ? 'Выйти' : 'Войти';
+      $token.disabled = ok;
+    }
+
+    $connect.addEventListener('click', () => {
+      if (socket) {                 // уже подключены → отключаемся
+        socket.disconnect();
+        socket = null;
+        setConnected(false);
+        $status.textContent = 'не подключён';
+        return;
+      }
+
+      const token = $token.value.trim();
+      if (!token) {
+        $status.textContent = 'нужен токен';
+        return;
+      }
+
+      // канал берём из ?channel= в url, иначе — свой ник из токена
+      const channel = new URLSearchParams(location.search).get('channel') || readUsername(token);
+      if (!channel) {
+        $status.textContent = 'в токене нет username';
+        return;
+      }
+      localStorage.setItem('accessToken', token);
+
+      $status.textContent = 'подключаюсь...';
+      socket = io(SERVER, {
+        // токен читается в handleConnection из handshake.headers.authorization,
+        // поэтому нужен polling-транспорт (заголовки в чистом ws не отправить)
+        transports: ['polling', 'websocket'],
+        extraHeaders: { Authorization: 'Bearer ' + token },
+      });
+
+      socket.on('connect', () => {
+        $status.textContent = 'подключён к #' + channel;
+        setConnected(true);
+        socket.emit('joinChannel', channel);
+      });
+
+      socket.on('chat', (raw) => {
+        const { username, text } = parseChat(raw);
+        addMessage(username, text);
+      });
+
+      socket.on('room', (text) => addMessage(null, text));
+
+      socket.on('connect_error', (err) => {
+        $status.textContent = 'ошибка: ' + err.message;
+      });
+
+      socket.on('disconnect', () => {
+        $status.textContent = 'отключён';
+        setConnected(false);
+      });
+    });
+
+    $form.addEventListener('submit', (e) => {
+      e.preventDefault();
+      const message = $input.value.trim();
+      if (!message || !socket) return;
+      socket.emit('sendMessage', message);   // своё сообщение придёт обратно через 'chat'
+      $input.value = '';
+    });
+  </script>
+</body>
+
+</html>

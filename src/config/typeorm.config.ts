@@ -1,6 +1,8 @@
 import { TypeOrmModuleOptions } from '@nestjs/typeorm';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { DataSource, DataSourceOptions } from 'typeorm';
+import * as dotenv from 'dotenv';
+dotenv.config({ path: process.env.NODE_ENV === 'test' ? '.env.test' : '.env' });
 
 ConfigModule.forRoot({ isGlobal: true });
 
@@ -15,7 +17,7 @@ export const typeOrmConfig: TypeOrmModuleOptions = {
   database: configService.getOrThrow<string>('POSTGRES_DB'),
   entities: [__dirname + '/../**/*.entity.{js,ts}'],
   migrations: [__dirname + '/../migrations/*.{js,ts}'],
-  synchronize: false,
+  synchronize: process.env.NODE_ENV === 'test',
 };
 
 export const dataSource = new DataSource(

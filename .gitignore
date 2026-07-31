@@ -6,6 +6,9 @@ _README.md
 /node_modules
 /build
 
+# HLS-сегменты, которые пишет node-media-server (http.mediaroot)
+/media
+
 # Logs
 logs
 *.log
