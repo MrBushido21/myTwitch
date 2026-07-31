@@ -6,6 +6,7 @@ import { typeOrmConfig } from './config/typeorm.config';
 import { ChannelModule } from './channel/channel.module';
 import { EventsModule } from './events/events.module';
 import { InternalModule } from './internal/internal.module';
+import { StreamModule } from './stream/stream.module';
 
 @Module({
   imports: [
@@ -17,7 +18,8 @@ import { InternalModule } from './internal/internal.module';
     AuthModule,
     ChannelModule,
     EventsModule,
-    InternalModule
+    InternalModule,
+    StreamModule
   ],
 })
 export class AppModule {}

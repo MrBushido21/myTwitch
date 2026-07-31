@@ -1,7 +1,9 @@
 import { UserEntity } from "src/auth/entities/user.entity"
-import { Column, Entity, JoinColumn, OneToOne, PrimaryGeneratedColumn } from "typeorm"
+import { StreamEntity } from "src/stream/entities/stream.entity"
+import { Column, Entity, Index, JoinColumn, OneToMany, OneToOne, PrimaryGeneratedColumn } from "typeorm"
 
 @Entity()
+@Index('idx_channel_online', ['online_status'], { where: `"online_status" = 'online'` })
 export class ChannelEntity {
     @PrimaryGeneratedColumn("uuid")
     id!:string 
@@ -15,6 +17,9 @@ export class ChannelEntity {
     @Column({type:'varchar', nullable: true})
     description!:string | null
 
+    @Column({default: "stream"})
+    stream_title!:string
+
     @Column({type:'varchar', nullable: true})
     baner_img_link!: string | null
 
@@ -24,4 +29,7 @@ export class ChannelEntity {
     @OneToOne(() => UserEntity, (user) => user.channel)
     @JoinColumn({ name: 'user_id' })
     user!: UserEntity
+
+    @OneToMany(() => StreamEntity, (stream) => stream.channel)
+    streams!: StreamEntity[]
 }

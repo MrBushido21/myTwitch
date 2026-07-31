@@ -1,0 +1,241 @@
+<!DOCTYPE html>
+<html lang="ru">
+
+<head>
+  <meta charset="utf-8">
+  <title>myTwitch — сейчас в эфире</title>
+  <style>
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      background: #0e0e10;
+      color: #efeff1;
+      font: 14px/1.4 system-ui, sans-serif;
+    }
+
+    header {
+      display: flex;
+      align-items: baseline;
+      gap: 12px;
+      padding: 18px 24px;
+      border-bottom: 1px solid #2a2a2d;
+    }
+
+    header h1 {
+      margin: 0;
+      font-size: 18px;
+    }
+
+    header .count {
+      font-size: 13px;
+      color: #adadb8;
+    }
+
+    #grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+      gap: 20px;
+      padding: 24px;
+    }
+
+    .card {
+      display: block;
+      color: inherit;
+      text-decoration: none;
+    }
+
+    .preview {
+      position: relative;
+      aspect-ratio: 16 / 9;
+      background: #000;
+      border-radius: 6px;
+      overflow: hidden;
+    }
+
+    .preview img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      display: block;
+    }
+
+    .card:hover .preview {
+      outline: 2px solid #9147ff;
+      outline-offset: 2px;
+    }
+
+    .live {
+      position: absolute;
+      top: 8px;
+      left: 8px;
+      background: #eb0400;
+      color: #fff;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: .4px;
+      padding: 2px 5px;
+      border-radius: 3px;
+    }
+
+    .viewers {
+      position: absolute;
+      bottom: 8px;
+      left: 8px;
+      background: rgba(0, 0, 0, .7);
+      font-size: 12px;
+      padding: 2px 5px;
+      border-radius: 3px;
+    }
+
+    .meta {
+      display: flex;
+      gap: 10px;
+      margin-top: 10px;
+    }
+
+    .avatar {
+      flex: none;
+      width: 36px;
+      height: 36px;
+      border-radius: 50%;
+      background: #9147ff;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 700;
+      text-transform: uppercase;
+    }
+
+    .title {
+      font-weight: 600;
+      /* длинные названия режем, чтобы плитки не разъезжались по высоте */
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .who {
+      color: #adadb8;
+      font-size: 13px;
+    }
+
+    #empty {
+      padding: 60px 24px;
+      text-align: center;
+      color: #adadb8;
+    }
+  </style>
+</head>
+
+<body>
+  <header>
+    <h1>Сейчас в эфире</h1>
+    <span class="count" id="count"></span>
+  </header>
+
+  <div id="grid"></div>
+  <div id="empty" hidden></div>
+
+  <script>
+    const API = location.protocol === 'file:' ? 'http://localhost:3000' : location.origin;
+    const REFRESH_MS = 20000;
+
+    const $grid = document.getElementById('grid');
+    const $empty = document.getElementById('empty');
+    const $count = document.getElementById('count');
+
+    function showEmpty(text) {
+      $grid.replaceChildren();
+      $empty.textContent = text;
+      $empty.hidden = false;
+      $count.textContent = '';
+    }
+
+    // thumb.jpg перезаписывается ffmpeg под тем же именем, поэтому браузер
+    // отдал бы кадр из кеша — метка времени заставляет его перекачать
+    function bust(url) {
+      return url + (url.includes('?') ? '&' : '?') + 't=' + Date.now();
+    }
+
+    function card(item) {
+      const username = item.user.username;
+      const stream = item.stream;
+
+      const a = document.createElement('a');
+      a.className = 'card';
+      a.href = `${API}/channels/${encodeURIComponent(username)}`;
+
+      const preview = document.createElement('div');
+      preview.className = 'preview';
+
+      if (stream.thumbnail_url) {
+        const img = document.createElement('img');
+        img.src = bust(stream.thumbnail_url);
+        img.alt = '';
+        // первые секунды эфира кадра ещё нет — прячем битую картинку
+        img.addEventListener('error', () => img.remove());
+        preview.append(img);
+      }
+
+      const live = document.createElement('span');
+      live.className = 'live';
+      live.textContent = 'LIVE';
+
+      const viewers = document.createElement('span');
+      viewers.className = 'viewers';
+      viewers.textContent = stream.viewers + ' смотрят';
+
+      preview.append(live, viewers);
+
+      const avatar = document.createElement('div');
+      avatar.className = 'avatar';
+      avatar.textContent = username.slice(0, 1);
+
+      const title = document.createElement('div');
+      title.className = 'title';
+      title.textContent = stream.title || 'Без названия';   // textContent — защита от html в заголовке
+
+      const who = document.createElement('div');
+      who.className = 'who';
+      who.textContent = username;
+
+      const text = document.createElement('div');
+      text.style.minWidth = '0';
+      text.append(title, who);
+
+      const meta = document.createElement('div');
+      meta.className = 'meta';
+      meta.append(avatar, text);
+
+      a.append(preview, meta);
+      return a;
+    }
+
+    async function load() {
+      let items;
+      try {
+        const res = await fetch(`${API}/channels/online`);
+        if (!res.ok) return showEmpty('не удалось получить список эфиров');
+        items = await res.json();
+      } catch {
+        return showEmpty('API недоступен');
+      }
+
+      if (!Array.isArray(items) || items.length === 0) {
+        return showEmpty('сейчас никто не стримит');
+      }
+
+      $empty.hidden = true;
+      $count.textContent = items.length === 1 ? '1 канал' : items.length + ' каналов';
+      $grid.replaceChildren(...items.map(card));
+    }
+
+    load();
+    setInterval(load, REFRESH_MS);
+  </script>
+</body>
+
+</html>

@@ -84,9 +84,15 @@
       flex: 1;
     }
 
-    #status {
+    #status,
+    #viewers {
       font-size: 12px;
       color: #adadb8;
+    }
+
+    #offline {
+      color: #adadb8;
+      font-size: 16px;
     }
 
     #messages {
@@ -121,7 +127,8 @@
 
 <body>
   <div id="player">
-    <video id="video" controls autoplay></video>
+    <video id="video" controls autoplay hidden></video>
+    <div id="offline">загрузка...</div>
   </div>
 
   <aside id="chat">
@@ -133,6 +140,7 @@
         <button id="connect">Войти</button>
       </div>
       <div id="status">не подключён</div>
+      <div id="viewers"></div>
     </header>
 
     <div id="messages"></div>
@@ -146,23 +154,54 @@
   <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
   <script src="https://cdn.socket.io/4.8.1/socket.io.min.js"></script>
   <script>
+    // страницу отдаёт сам API, так что origin тот же; file:// оставлен для отладки
+    const SERVER = location.protocol === 'file:' ? 'http://localhost:3000' : location.origin;
+
+    // /channels/oleglis9 -> oleglis9
+    const CHANNEL = decodeURIComponent(location.pathname.split('/').filter(Boolean).pop() || '');
+
     // ---------- плеер ----------
     const video = document.getElementById('video');
-    const src = 'http://localhost:8000/live/b8ddf22fbac9758ff45a3342092d0d1346e0fe104e10d048a60123266046541d/index.m3u8';
-    if (Hls.isSupported()) {
-      const hls = new Hls();
-      hls.loadSource(src);
-      hls.attachMedia(video);
-    } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
-      video.src = src;   // Safari умеет нативно
+    const $offline = document.getElementById('offline');
+
+    function showOffline(text) {
+      $offline.textContent = text;
+      $offline.hidden = false;
+      video.hidden = true;
     }
 
+    function play(src) {
+      $offline.hidden = true;
+      video.hidden = false;
+      if (Hls.isSupported()) {
+        const hls = new Hls();
+        hls.loadSource(src);
+        hls.attachMedia(video);
+      } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+        video.src = src;   // Safari умеет нативно
+      }
+    }
+
+    (async () => {
+      if (!CHANNEL) return showOffline('канал не указан в адресе');
+      document.title = CHANNEL + ' — myTwitch';
+      try {
+        const res = await fetch(`${SERVER}/channels/${encodeURIComponent(CHANNEL)}/info`);
+        if (!res.ok) return showOffline('канал не найден');
+        const channel = await res.json();
+        // playback_url приходит null, когда online_status !== 'online'
+        channel.playback_url ? play(channel.playback_url) : showOffline(CHANNEL + ' не в эфире');
+      } catch {
+        showOffline('API недоступен');
+      }
+    })();
+
     // ---------- чат ----------
-    const SERVER = 'http://localhost:3000';
 
     const $token = document.getElementById('token');
     const $connect = document.getElementById('connect');
     const $status = document.getElementById('status');
+    const $viewers = document.getElementById('viewers');
     const $messages = document.getElementById('messages');
     const $form = document.getElementById('form');
     const $input = document.getElementById('input');
@@ -211,48 +250,42 @@
       return m ? { username: m[1], text: m[2] } : { username: null, text: raw };
     }
 
+    // ok — «можно писать», то есть подключились с токеном. Смотреть можно и без него.
     function setConnected(ok) {
       $input.disabled = !ok;
       $send.disabled = !ok;
-      $connect.textContent = ok ? 'Выйти' : 'Войти';
-      $token.disabled = ok;
+      $connect.textContent = ok ? 'Сменить токен' : 'Войти';
     }
 
-    $connect.addEventListener('click', () => {
-      if (socket) {                 // уже подключены → отключаемся
+    // Зритель — это любой, кто открыл страницу, поэтому подключаемся сразу и без токена.
+    // Токен нужен только чтобы писать: его читает handleConnection и кладёт в client.data.user.
+    function connect(token) {
+      if (socket) {
         socket.disconnect();
         socket = null;
-        setConnected(false);
-        $status.textContent = 'не подключён';
-        return;
       }
 
-      const token = $token.value.trim();
-      if (!token) {
-        $status.textContent = 'нужен токен';
-        return;
-      }
-
-      // канал берём из ?channel= в url, иначе — свой ник из токена
-      const channel = new URLSearchParams(location.search).get('channel') || readUsername(token);
+      // канал берём из адреса страницы, иначе — свой ник из токена
+      const channel = CHANNEL || (token && readUsername(token));
       if (!channel) {
-        $status.textContent = 'в токене нет username';
+        $status.textContent = 'непонятно, к какому каналу подключаться';
         return;
       }
-      localStorage.setItem('accessToken', token);
 
       $status.textContent = 'подключаюсь...';
       socket = io(SERVER, {
-        // токен читается в handleConnection из handshake.headers.authorization,
-        // поэтому нужен polling-транспорт (заголовки в чистом ws не отправить)
+        // токен читается из handshake.headers.authorization, поэтому нужен
+        // polling-транспорт: в чистом ws заголовки не отправить
         transports: ['polling', 'websocket'],
-        extraHeaders: { Authorization: 'Bearer ' + token },
+        ...(token ? { extraHeaders: { Authorization: 'Bearer ' + token } } : {}),
       });
 
       socket.on('connect', () => {
-        $status.textContent = 'подключён к #' + channel;
-        setConnected(true);
-        socket.emit('joinChannel', channel);
+        $status.textContent = token ? 'подключён к #' + channel : 'смотрите как гость';
+        setConnected(!!token);
+        socket.emit('joinChannel', channel, (ack) => {
+          if (!ack?.ok) $status.textContent = 'канал не найден: ' + channel;
+        });
       });
 
       socket.on('chat', (raw) => {
@@ -262,6 +295,10 @@
 
       socket.on('room', (text) => addMessage(null, text));
 
+      socket.on('viewers', (n) => {
+        $viewers.textContent = n + ' смотрят';
+      });
+
       socket.on('connect_error', (err) => {
         $status.textContent = 'ошибка: ' + err.message;
       });
@@ -270,7 +307,20 @@
         $status.textContent = 'отключён';
         setConnected(false);
       });
+    }
+
+    // кнопка теперь не «подключиться», а «перезайти с токеном»
+    $connect.addEventListener('click', () => {
+      const token = $token.value.trim();
+      if (!token) {
+        $status.textContent = 'нужен токен, чтобы писать';
+        return;
+      }
+      localStorage.setItem('accessToken', token);
+      connect(token);
     });
+
+    connect($token.value.trim());
 
     $form.addEventListener('submit', (e) => {
       e.preventDefault();

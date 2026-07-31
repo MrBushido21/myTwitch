@@ -4,6 +4,8 @@ import { TypeOrmModule } from "@nestjs/typeorm";
 import { ChannelController } from "./channel.controller";
 import { ChannelService } from "./channel.service";
 import { ChannelEntity } from "./entities/chanel.entity";
+import { EventsModule } from "src/events/events.module";
+import { StreamModule } from "src/stream/stream.module";
 
 
 
@@ -11,6 +13,8 @@ import { ChannelEntity } from "./entities/chanel.entity";
    imports: [
     ConfigModule,
     TypeOrmModule.forFeature([ChannelEntity,]),
+    EventsModule,
+    StreamModule
   ],
   controllers: [ChannelController],
   providers: [ChannelService],
